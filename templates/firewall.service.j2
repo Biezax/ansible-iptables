@@ -1,0 +1,12 @@
+[Unit]
+Description=Firewall service 
+After=network.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/etc/firewall/apply_rules.sh
+RemainAfterExit=yes
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

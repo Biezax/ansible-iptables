@@ -1,0 +1,159 @@
+---
+# Включить сервис iptables
+iptables_enabled: true
+
+# Включить IPv6 правила
+ip6tables_enabled: true
+
+# Директории для хранения правил
+iptables_rules_dir: /etc/firewall/rules.d/4
+ip6tables_rules_dir: /etc/firewall/rules.d/6
+
+# Директория для хранения состояния
+iptables_state_dir: /var/lib/iptables-ng/state
+
+# Дефолтные правила iptables (00-default.rules) для IPv4
+iptables_rules:
+  filter:
+    INPUT:
+      - rule: "-j CUSTOM_FILTERS"
+        comment: "Jump to CUSTOM_FILTERS chain for all filtering"
+        priority: 0
+    CUSTOM_FILTERS:
+      # ACCEPT rules: all equal priority
+      - rule: "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+        comment: "Accept established/related connections"
+        priority: 10
+      - rule: "-i lo -j ACCEPT"
+        comment: "Accept traffic from loopback"
+        priority: 10
+      - rule: "-p tcp --dport 22 -j ACCEPT"
+        comment: "Accept SSH (22/tcp)"
+        priority: 10
+      - rule: "-p tcp --dport 80 -j ACCEPT"
+        comment: "Accept HTTP (80/tcp)"
+        priority: 10
+      - rule: "-p tcp --dport 443 -j ACCEPT"
+        comment: "Accept HTTPS (443/tcp)"
+        priority: 10
+      - rule: "-p tcp --dport 53 -j ACCEPT"
+        comment: "Accept DNS TCP (53/tcp)"
+        priority: 10
+      - rule: "-p udp --dport 53 -j ACCEPT"
+        comment: "Accept DNS UDP (53/udp)"
+        priority: 10
+      # LOG and DROP
+      - rule: "-j LOG --log-prefix \"iptables-drop: \""
+        comment: "Log dropped packets"
+        priority: 20
+      - rule: "-j DROP"
+        comment: "Drop everything else"
+        priority: 30
+    DOCKER-USER:
+      - rule: "-j CUSTOM_FILTERS"
+        comment: "Jump to common CUSTOM_FILTERS chain for Docker rules"
+        priority: 0
+      - rule: "-j RETURN"
+        comment: "Return to calling chain for unmatched packets"
+        priority: 10
+  raw:
+    PREROUTING:
+      # NOTRACK rules: equal priority
+      - rule: "-p tcp --dport 22 -j NOTRACK"
+        comment: "NOTRACK for SSH"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p tcp --dport 80 -j NOTRACK"
+        comment: "NOTRACK for HTTP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p tcp --dport 443 -j NOTRACK"
+        comment: "NOTRACK for HTTPS"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p tcp --dport 53 -j NOTRACK"
+        comment: "NOTRACK for DNS TCP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p udp --dport 53 -j NOTRACK"
+        comment: "NOTRACK for DNS UDP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+
+# Дефолтные правила ip6tables (00-default.rules) для IPv6
+ip6tables_rules:
+  filter:
+    INPUT:
+      - rule: "-j CUSTOM_FILTERS"
+        comment: "Jump to CUSTOM_FILTERS chain for all IPv6 filtering"
+        priority: 0
+    CUSTOM_FILTERS:
+      # ACCEPT rules: all equal priority
+      - rule: "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+        comment: "Accept established/related connections"
+        priority: 10
+      - rule: "-i lo -j ACCEPT"
+        comment: "Accept traffic from loopback"
+        priority: 10
+      - rule: "-p ipv6-icmp -j ACCEPT"
+        comment: "Accept all ICMPv6 messages"
+        priority: 10
+      - rule: "-p tcp --dport 22 -j ACCEPT"
+        comment: "Accept SSH (22/tcp)"
+        priority: 10
+      - rule: "-p tcp --dport 80 -j ACCEPT"
+        comment: "Accept HTTP (80/tcp)"
+        priority: 10
+      - rule: "-p tcp --dport 443 -j ACCEPT"
+        comment: "Accept HTTPS (443/tcp)"
+        priority: 10
+      - rule: "-p tcp --dport 53 -j ACCEPT"
+        comment: "Accept DNS TCP (53/tcp)"
+        priority: 10
+      - rule: "-p udp --dport 53 -j ACCEPT"
+        comment: "Accept DNS UDP (53/udp)"
+        priority: 10
+      # LOG and DROP
+      - rule: "-j LOG --log-prefix \"ip6tables-drop: \""
+        comment: "Log dropped packets"
+        priority: 20
+      - rule: "-j DROP"
+        comment: "Drop everything else"
+        priority: 30
+    DOCKER-USER:
+      - rule: "-j CUSTOM_FILTERS"
+        comment: "Jump to common CUSTOM_FILTERS chain for Docker rules (IPv6)"
+        priority: 0
+      - rule: "-j RETURN"
+        comment: "Return to calling chain for unmatched packets (IPv6)"
+        priority: 10
+  raw:
+    PREROUTING:
+      # NOTRACK rules: equal priority
+      - rule: "-p tcp --dport 22 -j NOTRACK"
+        comment: "NOTRACK for SSH"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p tcp --dport 80 -j NOTRACK"
+        comment: "NOTRACK for HTTP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p tcp --dport 443 -j NOTRACK"
+        comment: "NOTRACK for HTTPS"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p tcp --dport 53 -j NOTRACK"
+        comment: "NOTRACK for DNS TCP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p udp --dport 53 -j NOTRACK"
+        comment: "NOTRACK for DNS UDP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+
+# Пути к файлам iptables
+iptables_compiled_file: /etc/firewall/compiled.rules
+ip6tables_compiled_file: /etc/firewall/compiled-v6.rules
+
+# список внешних интерфейсов, иначе будет вычислен автоматически
+external_interfaces: []

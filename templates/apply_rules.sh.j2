@@ -1,0 +1,289 @@
+#!/bin/bash
+# Managed by Ansible - DO NOT EDIT
+set -euo pipefail
+
+RULES_DIR="{{ iptables_rules_dir }}"
+IPV6_DIR="{{ ip6tables_rules_dir }}"
+IP6_ENABLED={{ ip6tables_enabled | lower }}
+STATE_DIR="{{ iptables_state_dir }}"
+
+{% raw %}
+TMP_RESTORE_FILE=$(mktemp)
+TMP_DELETE_LIST=$(mktemp)
+
+# Ensure state directory exists (optional, better done by Ansible)
+# mkdir -p "$STATE_DIR"
+
+# --- Debug logging function ---
+DEBUG_ENABLED=false
+log_debug() {
+    if [ "$DEBUG_ENABLED" = "true" ]; then
+        echo "DEBUG: $*" >&2
+    fi
+}
+
+generate_files() {
+  local dir="$1"
+  local restore_file="$2"
+  local delete_list_file="$3"
+  local iptables_cmd_base="$4"
+
+  log_debug "[generate_files] Processing directory: $dir"
+
+  if [ ! -d "$dir" ]; then
+    echo "Directory $dir does not exist, generating empty files." >&2
+    # Empty restore file needs initial table definitions for iptables-restore
+    echo "*filter\nCOMMIT\n*nat\nCOMMIT\n*mangle\nCOMMIT\n*raw\nCOMMIT\n*security\nCOMMIT" > "$restore_file"
+    > "$delete_list_file"
+    return 0
+  fi
+
+  > "$restore_file"
+  > "$delete_list_file"
+
+  local rules_to_delete="" # Accumulates -D commands
+  local restore_content=""   # Accumulates restore file content
+
+  declare -A processed_tables
+  declare -A processed_chains
+
+  # 1. Find all rule files
+  local rule_files=()
+  while IFS= read -r file; do
+      rule_files+=("$file")
+  done < <(find "$dir" -type f -name "*.rules" | sort)
+
+  log_debug "[generate_files] Found ${#rule_files[@]} rule files."
+
+  # 2. Process each rule file
+  local previous_tblname="" # Track table changes
+  for rf in "${rule_files[@]}"; do
+    log_debug "[generate_files] Processing file: $rf"
+
+    # Extract table and chain name from path
+    local chain_dir
+    local tbl_dir
+    local chainname
+    local tblname
+
+    chain_dir=$(dirname "$rf")
+    chainname=$(basename "$chain_dir")
+    tbl_dir=$(dirname "$chain_dir")
+    tblname=$(basename "$tbl_dir")
+
+    # Check if path structure is as expected (dir/table/chain/file.rules)
+    if [[ -z "$tblname" || -z "$chainname" || "$tbl_dir" == "$dir" ]]; then
+        echo "Warning: Skipping file with unexpected path structure: $rf" >&2
+        continue
+    fi
+
+    # If table changed, commit the previous one (if any)
+    if [[ -n "$previous_tblname" && "$tblname" != "$previous_tblname" ]]; then
+        log_debug "[generate_files] Adding COMMIT for previous table '$previous_tblname'"
+        restore_content+="COMMIT\n"
+    fi
+
+    # Add table header if not already processed for this table
+    if ! [[ -v processed_tables[$tblname] ]]; then
+        log_debug "[generate_files] Adding header for table '$tblname'"
+        restore_content+="*${tblname}\n"
+        processed_tables[$tblname]=1
+    fi
+
+    # Add custom chain definition if it's a custom chain and not yet defined in this table
+    case "$chainname" in
+      INPUT|OUTPUT|FORWARD|PREROUTING|POSTROUTING)
+        ;;
+      *)
+        local chain_key="${tblname}/${chainname}"
+        if ! [[ -v processed_chains[$chain_key] ]]; then
+            log_debug "[generate_files] Adding definition for custom chain '$chainname' in table '$tblname'"
+            restore_content+=":${chainname} - [0:0]\n"
+            processed_chains[$chain_key]=1
+        fi
+        ;;
+    esac
+
+    # Read rules from the file
+    local rule_added=0
+    while IFS= read -r rule; do
+      log_debug "[generate_files] Read rule for $tblname/$chainname: '${rule}'"
+
+      # Add rule to restore content
+      restore_content+="-A ${chainname} ${rule}\n"
+
+      # Generate DELETE command and prepend it
+      rules_to_delete="${iptables_cmd_base} -t ${tblname} -D ${chainname} ${rule}\n${rules_to_delete}"
+      rule_added=1
+
+    done < <(grep -Ev '^(#|$)' "$rf") # Process substitution is safe here
+
+    # Update previous table name
+    previous_tblname="$tblname"
+
+  done
+
+  # 3. Add COMMIT for the very last processed table (if any)
+  if [[ -n "$previous_tblname" ]]; then
+      log_debug "[generate_files] Adding final COMMIT for table '$previous_tblname'"
+      restore_content+="COMMIT\n"
+  fi
+
+  # 4. Write the final files
+  log_debug "[generate_files] Final delete commands generated:"
+  log_debug "--- Rules (--D):\n${rules_to_delete}---"
+  log_debug "[generate_files] Final restore content generated:"
+
+  echo -e "${restore_content}" > "$restore_file"
+  echo -e "${rules_to_delete}" > "$delete_list_file"
+
+}
+
+# --- Function to apply rulesets ---
+apply_ruleset() {
+  local restore_cmd="$1"
+  local iptables_cmd="$2"
+  local current_restore_file="$3"
+  local current_delete_list="$4"
+  local last_restore_state_file="$5"
+  local last_delete_state_file="$6"
+  local success=0 # 0 = success
+
+  echo "Processing rules for ${iptables_cmd}..."
+
+  # Check if state files exist
+  if [ ! -f "$last_restore_state_file" ] || [ ! -f "$last_delete_state_file" ]; then
+    echo "State files not found (${last_restore_state_file}), performing initial rule application." >&2
+    # Create empty state files to avoid errors later
+    # Empty restore file needs initial table definitions for iptables-restore
+    echo "*filter\nCOMMIT\n*nat\nCOMMIT\n*mangle\nCOMMIT\n*raw\nCOMMIT\n*security\nCOMMIT" > "$last_restore_state_file"
+    > "$last_delete_state_file"
+  fi
+
+  # --- Standard incremental logic --- 
+  echo "Applying rules incrementally (using ${restore_cmd} --noflush)..."
+
+  # 1. Delete old rules (read from last_delete_state_file)
+  if [ -s "$last_delete_state_file" ]; then
+    echo "Deleting previously managed rules..." >&2
+    # Read delete commands line by line
+    while IFS= read -r delete_cmd || [ -n "$delete_cmd" ]; do # Process last line even if no newline
+      [ -z "$delete_cmd" ] && continue
+      echo "Executing: ${delete_cmd}" >&2
+      # Use eval to handle potential quoting issues in rule arguments (e.g., --log-prefix)
+      if ! eval "${delete_cmd}"; then
+        echo "Warning: Failed to execute delete command: ${delete_cmd}. Continuing..." >&2
+      fi
+    done < "$last_delete_state_file"
+  else
+    echo "No previous rules to delete." >&2
+  fi
+  
+  # 2. Add new rules using restore --noflush
+  echo "Applying new rules using ${restore_cmd} --noflush..." >&2
+  if ${restore_cmd} --noflush < "$current_restore_file"; then
+    # Success: Update state files
+    echo "New rules applied successfully via ${restore_cmd} --noflush."
+    log_debug "Content of temporary delete list (${current_delete_list}) before copying:"
+    if [ "$DEBUG_ENABLED" = "true" ]; then cat "$current_delete_list" >&2; fi # Show file content only if debug
+    log_debug "--- END DEBUG for delete list content ---"
+    cp "$current_restore_file" "$last_restore_state_file"
+    cp "$current_delete_list" "$last_delete_state_file"
+    success=0
+  else
+    echo "Error: Failed to apply new ruleset via ${restore_cmd} --noflush. Attempting rollback..." >&2
+    success=1
+
+    echo "Attempting rollback to last known good state using ${restore_cmd} --noflush..." >&2
+    if ${restore_cmd} --noflush < "$last_restore_state_file"; then
+      echo "Rollback to last known good state via ${restore_cmd} --noflush appears successful." >&2
+    else
+      echo "Error: Rollback using ${restore_cmd} --noflush also failed. State may be inconsistent. Manual intervention required." >&2
+    fi
+  fi
+  return $success
+}
+
+# --- Main Execution ---
+
+overall_success=0
+FLUSH_ALL=false
+
+# Parse command-line arguments
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        --flush)
+        FLUSH_ALL=true
+        shift
+        ;;
+        --debug)
+        DEBUG_ENABLED=true
+        shift
+        ;;
+        *)
+        echo "Unknown option: $1" >&2
+        shift
+        ;;
+    esac
+done
+
+# IPv4
+echo "--- Processing IPv4 rules ---"
+IPV4_LAST_RESTORE_STATE="${STATE_DIR}/ipv4_last.restore"
+IPV4_LAST_DELETE_STATE="${STATE_DIR}/ipv4_last.delete"
+
+if [ "$FLUSH_ALL" = "true" ]; then
+    echo "--- Flushing all IPv4 rules and chains (--flush) ---"
+    iptables -P INPUT ACCEPT || echo "Warning: Failed to set INPUT policy for iptables"
+    iptables -P FORWARD ACCEPT || echo "Warning: Failed to set FORWARD policy for iptables"
+    iptables -P OUTPUT ACCEPT || echo "Warning: Failed to set OUTPUT policy for iptables"
+    iptables -t nat -F || echo "Warning: Failed to flush nat table for iptables"
+    iptables -t mangle -F || echo "Warning: Failed to flush mangle table for iptables"
+    iptables -F || echo "Warning: Failed to flush filter table (default) for iptables"
+    iptables -X || echo "Warning: Failed to delete custom chains for iptables"
+    log_debug "Finished flushing iptables."
+    echo "Clearing IPv4 delete state file: $IPV4_LAST_DELETE_STATE"
+    # Clear the delete state file so the next apply_ruleset skips the delete step
+    > "$IPV4_LAST_DELETE_STATE" 2>/dev/null || echo "Warning: Could not clear $IPV4_LAST_DELETE_STATE"
+fi
+
+generate_files "$RULES_DIR" "$TMP_RESTORE_FILE" "$TMP_DELETE_LIST" "iptables"
+if ! apply_ruleset "iptables-restore" "iptables" "$TMP_RESTORE_FILE" "$TMP_DELETE_LIST" "$IPV4_LAST_RESTORE_STATE" "$IPV4_LAST_DELETE_STATE"; then
+    overall_success=1
+    echo "Error applying IPv4 rules." >&2
+fi
+
+# IPv6
+if [ "$IP6_ENABLED" = "true" ]; then
+  echo "--- Processing IPv6 rules ---"
+  IPV6_LAST_RESTORE_STATE="${STATE_DIR}/ipv6_last.restore"
+  IPV6_LAST_DELETE_STATE="${STATE_DIR}/ipv6_last.delete"
+
+  # Flush if requested (using direct commands)
+  if [ "$FLUSH_ALL" = "true" ]; then
+      echo "--- Flushing all IPv6 rules and chains (--flush) ---"
+      ip6tables -P INPUT ACCEPT || echo "Warning: Failed to set INPUT policy for ip6tables"
+      ip6tables -P FORWARD ACCEPT || echo "Warning: Failed to set FORWARD policy for ip6tables"
+      ip6tables -P OUTPUT ACCEPT || echo "Warning: Failed to set OUTPUT policy for ip6tables"
+      ip6tables -t nat -F || echo "Warning: Failed to flush nat table for ip6tables"
+      ip6tables -t mangle -F || echo "Warning: Failed to flush mangle table for ip6tables"
+      ip6tables -F || echo "Warning: Failed to flush filter table (default) for ip6tables"
+      ip6tables -X || echo "Warning: Failed to delete custom chains for ip6tables"
+      log_debug "Finished flushing ip6tables."
+      echo "Clearing IPv6 delete state file: $IPV6_LAST_DELETE_STATE"
+      > "$IPV6_LAST_DELETE_STATE" 2>/dev/null || echo "Warning: Could not clear $IPV6_LAST_DELETE_STATE"
+  fi
+
+  generate_files "$IPV6_DIR" "$TMP_RESTORE_FILE" "$TMP_DELETE_LIST" "ip6tables"
+  if ! apply_ruleset "ip6tables-restore" "ip6tables" "$TMP_RESTORE_FILE" "$TMP_DELETE_LIST" "$IPV6_LAST_RESTORE_STATE" "$IPV6_LAST_DELETE_STATE"; then
+      overall_success=1
+      echo "Error applying IPv6 rules." >&2
+  fi
+fi
+
+rm -f "$TMP_RESTORE_FILE" "$TMP_DELETE_LIST"
+
+echo "--- Rule application finished ---"
+exit $overall_success
+{% endraw %}

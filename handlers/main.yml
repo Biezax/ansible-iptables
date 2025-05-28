@@ -1,0 +1,11 @@
+---
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+  ignore_errors: true
+
+- name: restart firewall
+  systemd:
+    name: firewall
+    state: restarted
+  ignore_errors: true 
