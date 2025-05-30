@@ -1,26 +1,20 @@
 ---
-# Включить сервис iptables
+# Enable iptables service
 iptables_enabled: true
 
-# Включить IPv6 правила
+# Enable IPv6 rules
 ip6tables_enabled: true
 
-# Директории для хранения правил
+# Directories for storing rules
 iptables_rules_dir: /etc/firewall/rules.d/4
 ip6tables_rules_dir: /etc/firewall/rules.d/6
 
-# Директория для хранения состояния
+# Directory for storing state
 iptables_state_dir: /var/lib/iptables-ng/state
 
-# Дефолтные правила iptables (00-default.rules) для IPv4
 iptables_rules:
   filter:
-    INPUT:
-      - rule: "-j CUSTOM_FILTERS"
-        comment: "Jump to CUSTOM_FILTERS chain for all filtering"
-        priority: 0
-    CUSTOM_FILTERS:
-      # ACCEPT rules: all equal priority
+    INPUT_DOCKER:
       - rule: "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
         comment: "Accept established/related connections"
         priority: 10
@@ -42,23 +36,14 @@ iptables_rules:
       - rule: "-p udp --dport 53 -j ACCEPT"
         comment: "Accept DNS UDP (53/udp)"
         priority: 10
-      # LOG and DROP
       - rule: "-j LOG --log-prefix \"iptables-drop: \""
         comment: "Log dropped packets"
-        priority: 20
+        priority: 98
       - rule: "-j DROP"
         comment: "Drop everything else"
-        priority: 30
-    DOCKER-USER:
-      - rule: "-j CUSTOM_FILTERS"
-        comment: "Jump to common CUSTOM_FILTERS chain for Docker rules"
-        priority: 0
-      - rule: "-j RETURN"
-        comment: "Return to calling chain for unmatched packets"
-        priority: 10
+        priority: 99
   raw:
     PREROUTING:
-      # NOTRACK rules: equal priority
       - rule: "-p tcp --dport 22 -j NOTRACK"
         comment: "NOTRACK for SSH"
         priority: 20
@@ -80,15 +65,9 @@ iptables_rules:
         priority: 20
         interfaces: "{{ external_interfaces }}"
 
-# Дефолтные правила ip6tables (00-default.rules) для IPv6
 ip6tables_rules:
   filter:
-    INPUT:
-      - rule: "-j CUSTOM_FILTERS"
-        comment: "Jump to CUSTOM_FILTERS chain for all IPv6 filtering"
-        priority: 0
-    CUSTOM_FILTERS:
-      # ACCEPT rules: all equal priority
+    INPUT_DOCKER:
       - rule: "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
         comment: "Accept established/related connections"
         priority: 10
@@ -113,23 +92,14 @@ ip6tables_rules:
       - rule: "-p udp --dport 53 -j ACCEPT"
         comment: "Accept DNS UDP (53/udp)"
         priority: 10
-      # LOG and DROP
       - rule: "-j LOG --log-prefix \"ip6tables-drop: \""
         comment: "Log dropped packets"
-        priority: 20
+        priority: 98
       - rule: "-j DROP"
         comment: "Drop everything else"
-        priority: 30
-    DOCKER-USER:
-      - rule: "-j CUSTOM_FILTERS"
-        comment: "Jump to common CUSTOM_FILTERS chain for Docker rules (IPv6)"
-        priority: 0
-      - rule: "-j RETURN"
-        comment: "Return to calling chain for unmatched packets (IPv6)"
-        priority: 10
+        priority: 99
   raw:
     PREROUTING:
-      # NOTRACK rules: equal priority
       - rule: "-p tcp --dport 22 -j NOTRACK"
         comment: "NOTRACK for SSH"
         priority: 20
@@ -151,9 +121,9 @@ ip6tables_rules:
         priority: 20
         interfaces: "{{ external_interfaces }}"
 
-# Пути к файлам iptables
+# Paths to iptables files
 iptables_compiled_file: /etc/firewall/compiled.rules
 ip6tables_compiled_file: /etc/firewall/compiled-v6.rules
 
-# список внешних интерфейсов, иначе будет вычислен автоматически
+# List of external interfaces, otherwise will be calculated automatically
 external_interfaces: []

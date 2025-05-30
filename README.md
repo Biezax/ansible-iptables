@@ -1,33 +1,33 @@
-# iptables-ng роль
+# iptables-ng role
 
-Роль для настройки iptables/ip6tables на серверах Ubuntu, обеспечивающая гибкую конфигурацию межсетевого экрана с автоматическим определением интерфейсов и инкрементальным применением правил.
+Role for configuring iptables/ip6tables on Ubuntu servers, providing flexible firewall configuration with automatic interface detection and incremental rule application.
 
-## Возможности
+## Features
 
-* Использует iptables/ip6tables с пользовательской цепочкой CUSTOM_FILTERS
-* Поддерживает как IPv4, так и IPv6 (конфигурируется отдельно)
-* **Управляет только собственными правилами** - не изменяет и не удаляет правила, созданные другими сервисами (Docker, fail2ban и т.д.)
-* Автоматически определяет внешние сетевые интерфейсы (исключая lo и docker*)
-* Опциональная интеграция с Docker через цепочку DOCKER-USER
-* Реализует иерархическую структуру `/etc/firewall/rules.d/4/<table>/<chain>/*.rules` для IPv4 и `/etc/firewall/rules.d/6/<table>/<chain>/*.rules` для IPv6
-* Инкрементальное применение правил с возможностью отката при ошибках
-* Использует NOTRACK для оптимизации входящего трафика на порты 22, 80, 443, 53
-* Поддерживает приоритизацию правил через префиксы файлов
-* Создает systemd сервис firewall для автоматического применения правил при загрузке
-* Включает пользовательский модуль Ansible для генерации структуры правил
+* Uses iptables/ip6tables with ephemeral INPUT_DOCKER chain for simplified configuration
+* Supports both IPv4 and IPv6 (configured separately)
+* **Manages only its own rules** - does not modify or delete rules created by other services (Docker, fail2ban, etc.)
+* Automatically detects external network interfaces (excluding lo and docker*)
+* Automatic Docker integration: rules from INPUT_DOCKER are duplicated to INPUT and DOCKER-USER chains with Docker adaptations
+* Implements hierarchical structure `/etc/firewall/rules.d/4/<table>/<chain>/*.rules` for IPv4 and `/etc/firewall/rules.d/6/<table>/<chain>/*.rules` for IPv6
+* Incremental rule application with rollback capability on errors
+* Uses NOTRACK for optimizing incoming traffic on ports 22, 80, 443, 53
+* Supports rule prioritization through file prefixes
+* Creates systemd firewall service for automatic rule application on boot
+* Includes custom Ansible module for generating rule structure
 
-## Переменные по умолчанию
+## Default Variables
 
-### Основные настройки
-* `iptables_enabled: true` - Включить сервис iptables
-* `ip6tables_enabled: true` - Включить правила IPv6
-* `iptables_rules_dir: /etc/firewall/rules.d/4` - Директория правил IPv4
-* `ip6tables_rules_dir: /etc/firewall/rules.d/6` - Директория правил IPv6
-* `iptables_state_dir: /var/lib/iptables-ng/state` - Директория состояния для отслеживания изменений
-* `external_interfaces: []` - Список внешних интерфейсов (если пуст, определяется автоматически)
+### Basic Settings
+* `iptables_enabled: true` - Enable iptables service
+* `ip6tables_enabled: true` - Enable IPv6 rules
+* `iptables_rules_dir: /etc/firewall/rules.d/4` - IPv4 rules directory
+* `ip6tables_rules_dir: /etc/firewall/rules.d/6` - IPv6 rules directory
+* `iptables_state_dir: /var/lib/iptables-ng/state` - State directory for tracking changes
+* `external_interfaces: []` - List of external interfaces (if empty, determined automatically)
 
-### Структура правил
-Правила задаются в формате:
+### Rule Structure
+Rules are defined in the format:
 ```yaml
 iptables_rules:
   <table>:
@@ -38,16 +38,22 @@ iptables_rules:
         interfaces: ["eth0", "eth1"]  # Optional: apply rule per interface
 ```
 
-### Правила по умолчанию для IPv4
-Переменные `iptables_rules` и `ip6tables_rules` используются только для настройки правил по умолчанию самой роли:
+### Ephemeral INPUT_DOCKER Chain
+The new logic uses a special ephemeral `INPUT_DOCKER` chain that:
+* **Automatically duplicates rules to INPUT chain** - rules are applied as-is
+* **Automatically duplicates rules to DOCKER-USER chain** with modifications:
+  - `-j ACCEPT` is replaced with `-j RETURN`
+  - `--dport` is replaced with `-m conntrack --ctorigdstport` for conntrack
+  - `-d` is replaced with `-m conntrack --ctorigdst` for conntrack
+  - Rules with `-i lo` are skipped for DOCKER-USER (not relevant)
+* Simplifies configuration - one set of rules applies to both chains
+
+### Default IPv4 Rules
+Variables `iptables_rules` and `ip6tables_rules` are used only for configuring the role's default rules:
 ```yaml
 iptables_rules:
   filter:
-    INPUT:
-      - rule: "-j CUSTOM_FILTERS"
-        comment: "Jump to CUSTOM_FILTERS chain for all filtering"
-        priority: 0
-    CUSTOM_FILTERS:
+    INPUT_DOCKER:
       - rule: "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
         comment: "Accept established/related connections"
         priority: 10
@@ -71,67 +77,75 @@ iptables_rules:
         priority: 10
       - rule: "-j LOG --log-prefix \"iptables-drop: \""
         comment: "Log dropped packets"
-        priority: 20
+        priority: 98
       - rule: "-j DROP"
         comment: "Drop everything else"
-        priority: 30
-    DOCKER-USER:
-      - rule: "-j CUSTOM_FILTERS"
-        comment: "Jump to common CUSTOM_FILTERS chain for Docker rules"
-        priority: 0
-      - rule: "-j RETURN"
-        comment: "Return to calling chain for unmatched packets"
-        priority: 10
+        priority: 99
   raw:
     PREROUTING:
       - rule: "-p tcp --dport 22 -j NOTRACK"
         comment: "NOTRACK for SSH"
         priority: 20
         interfaces: "{{ external_interfaces }}"
-      # ... similar NOTRACK rules for other ports
+      - rule: "-p tcp --dport 80 -j NOTRACK"
+        comment: "NOTRACK for HTTP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p tcp --dport 443 -j NOTRACK"
+        comment: "NOTRACK for HTTPS"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p tcp --dport 53 -j NOTRACK"
+        comment: "NOTRACK for DNS TCP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
+      - rule: "-p udp --dport 53 -j NOTRACK"
+        comment: "NOTRACK for DNS UDP"
+        priority: 20
+        interfaces: "{{ external_interfaces }}"
 ```
 
-### Правила по умолчанию для IPv6
-Аналогичная структура `ip6tables_rules` с добавлением:
+### Default IPv6 Rules
+Similar `ip6tables_rules` structure with addition:
 ```yaml
 ip6tables_rules:
   filter:
-    CUSTOM_FILTERS:
+    INPUT_DOCKER:
       - rule: "-p ipv6-icmp -j ACCEPT"
         comment: "Accept all ICMPv6 messages"
         priority: 10
 ```
 
-## Структура каталога правил
+## Rules Directory Structure
 
-Правила организованы в иерархической структуре:
+Rules are organized in a hierarchical structure:
 
 ```
 /etc/firewall/rules.d/
-├── 4/                         # IPv4 правила
-│   ├── filter/                # Таблица filter
-│   │   ├── INPUT/             # Цепочка INPUT
-│   │   │   └── 00-default.rules    # Правила по умолчанию (priority=0, name=default)
-│   │   ├── CUSTOM_FILTERS/    # Пользовательская цепочка
-│   │   │   ├── 10-default.rules    # Правила по умолчанию (priority=10)
-│   │   │   ├── 20-default.rules    # LOG и DROP (priority=20,30)
-│   │   │   └── 50-custom.rules     # Кастомные правила (priority=50)
-│   │   └── DOCKER-USER/       # Docker интеграция
-│   │       └── 00-default.rules
-│   └── raw/                   # Таблица raw
-│       └── PREROUTING/        # NOTRACK оптимизации
+├── 4/                         # IPv4 rules
+│   ├── filter/                # filter table
+│   │   ├── INPUT_DOCKER/      # Ephemeral chain (automatically duplicated to INPUT and DOCKER-USER)
+│   │   │   ├── 10-default.rules    # Main rules (priority=10)
+│   │   │   ├── 50-custom.rules     # Custom rules (priority=50)
+│   │   │   └── 98-drop.rules       # LOG and DROP (priority=98,99)
+│   │   ├── INPUT/             # Direct INPUT rules (optional)
+│   │   │   └── 00-custom.rules
+│   │   └── DOCKER-USER/       # Direct DOCKER-USER rules (optional)
+│   │       └── 00-custom.rules
+│   └── raw/                   # raw table
+│       └── PREROUTING/        # NOTRACK optimizations
 │           └── 20-default.rules
-└── 6/                         # IPv6 правила (аналогичная структура)
+└── 6/                         # IPv6 rules (similar structure)
     ├── filter/
     └── raw/
 ```
 
-Файлы правил называются по шаблону: `{priority:02d}-{name}.rules`
+Rule files are named with the pattern: `{priority:02d}-{name}.rules`
 
-## Использование
+## Usage
 
-### Базовое использование
-Роль автоматически применяет правила по умолчанию при включении:
+### Basic Usage
+The role automatically applies default rules when enabled:
 
 ```yaml
 - hosts: firewalls
@@ -139,7 +153,7 @@ ip6tables_rules:
     - iptables-ng
 ```
 
-### Добавление кастомных правил
+### Adding Custom Rules via INPUT_DOCKER
 ```yaml
 - hosts: web_servers
   roles:
@@ -149,7 +163,7 @@ ip6tables_rules:
       iptables_rules:
         rules:
           filter:
-            CUSTOM_FILTERS:
+            INPUT_DOCKER:
               - rule: "-p tcp --dport 8080 -j ACCEPT"
                 comment: "Allow custom web service"
                 priority: 15
@@ -161,16 +175,39 @@ ip6tables_rules:
       notify: restart firewall
 ```
 
-### Управление внешними интерфейсами
+### Adding Rules Directly to INPUT or DOCKER-USER
+```yaml
+- hosts: special_servers
+  roles:
+    - iptables-ng
+  tasks:
+    - name: Add direct INPUT rules (not duplicated to DOCKER-USER)
+      iptables_rules:
+        rules:
+          filter:
+            INPUT:
+              - rule: "-p tcp --dport 9000 -j ACCEPT"
+                comment: "Direct INPUT rule"
+                priority: 20
+            DOCKER-USER:
+              - rule: "-p tcp --dport 9001 -j RETURN"
+                comment: "Direct DOCKER-USER rule"
+                priority: 20
+        dest: "/etc/firewall/rules.d/4"
+        name: "direct-rules"
+      notify: restart firewall
+```
+
+### Managing External Interfaces
 ```yaml
 - hosts: edge_servers
   vars:
-    external_interfaces: ["eth0", "eth1"]  # Переопределить автоопределение
+    external_interfaces: ["eth0", "eth1"]  # Override auto-detection
   roles:
     - iptables-ng
 ```
 
-### Отключение IPv6
+### Disabling IPv6
 ```yaml
 - hosts: ipv4_only
   vars:
@@ -179,23 +216,23 @@ ip6tables_rules:
     - iptables-ng
 ```
 
-## Пользовательский модуль iptables_rules
+## Custom iptables_rules Module
 
-Роль включает модуль `iptables_rules` для добавления кастомных правил в директорию правил. Это основной способ добавления дополнительных правил:
+The role includes an `iptables_rules` module for adding custom rules to the rules directory. This is the primary way to add additional rules:
 
-### Параметры модуля:
-* `rules` (dict, required) - Структура правил в формате table->chain->list
-* `dest` (path) - Путь к директории правил (по умолчанию: '/etc/firewall/rules.d')  
-* `name` (str, required) - Имя для генерируемых файлов правил
-* `owner`, `group`, `mode` - Владелец и права доступа к файлам
+### Module Parameters:
+* `rules` (dict, required) - Rule structure in table->chain->list format
+* `dest` (path) - Path to rules directory (default: '/etc/firewall/rules.d')  
+* `name` (str, required) - Name for generated rule files
+* `owner`, `group`, `mode` - File owner and permissions
 
-### Пример использования:
+### Usage Example:
 ```yaml
 - name: Generate custom application rules
   iptables_rules:
     rules:
       filter:
-        CUSTOM_FILTERS:
+        INPUT_DOCKER:
           - rule: "-p tcp --dport 9000 -j ACCEPT"
             comment: "Allow application port"
             priority: 40
@@ -204,50 +241,104 @@ ip6tables_rules:
           - rule: "-p tcp --dport 9000 -j NOTRACK"
             comment: "NOTRACK for application"
             priority: 25
-    dest: "/etc/firewall/rules.d/4"  # Для IPv4
+    dest: "/etc/firewall/rules.d/4"  # For IPv4
     name: "myapp"
   notify: restart firewall
 
-# Для IPv6 используйте dest: "/etc/firewall/rules.d/6"
+# For IPv6 use dest: "/etc/firewall/rules.d/6"
 ```
 
-## Systemd сервис
+## Systemd Service
 
-Роль создает сервис `firewall.service`, который:
-* Запускается после network.target (и docker.service если Docker установлен)
-* Выполняет `/etc/firewall/apply_rules.sh` при старте
-* Поддерживает команды:
-  * `systemctl start firewall` - Применить правила
-  * `systemctl restart firewall` - Перезапустить правила
+The role creates a `firewall.service` that:
+* Starts after network.target (and docker.service if Docker is installed)
+* Executes `/etc/firewall/apply_rules.sh` on start
+* Supports commands:
+  * `systemctl start firewall` - Apply rules
+  * `systemctl restart firewall` - Restart rules
 
-## Скрипт применения правил
+## Rule Application Script
 
-`/etc/firewall/apply_rules.sh` поддерживает:
-* `--flush` - Очистить все правила перед применением
-* `--debug` - Включить отладочный вывод
-* Инкрементальное применение с автоматическим откатом при ошибках
-* Селективное управление правилами - удаляет только ранее созданные собственные правила
-* Отслеживание состояния через файлы в `{{ iptables_state_dir }}`
+`/etc/firewall/apply_rules.sh` supports:
+* `--flush` - Clear all rules before applying
+* `--debug` - Enable debug output
+* Incremental application with automatic rollback on errors
+* Selective rule management - removes only previously created own rules
+* State tracking through files in `{{ iptables_state_dir }}`
 
-## Обработчики
+## Handlers
 
-* `restart firewall` - Перезапускает systemd сервис firewall
-* `reload systemd` - Перезагружает конфигурацию systemd
+* `restart firewall` - Restarts systemd firewall service
+* `reload systemd` - Reloads systemd configuration
 
-## Требования
+## Requirements
 
-* Ubuntu/Debian с пакетом iptables
-* Права root для выполнения команд iptables
-* systemd для управления сервисом
-* Docker (опционально, для интеграции через DOCKER-USER цепочку)
+* Ubuntu/Debian with iptables package
+* Root privileges for executing iptables commands
+* systemd for service management
+* Docker (optional, for integration via DOCKER-USER chain)
 
-## Примечания
+## Notes
 
-* **Кастомные правила добавляются только через модуль `iptables_rules`**, а не через переопределение переменных роли
-* Переменные `iptables_rules` и `ip6tables_rules` предназначены только для настройки правил по умолчанию роли
-* **Принцип работы с правилами**: роль отслеживает и управляет только теми правилами, которые создала сама. При обновлении удаляются только ранее созданные роли правила, а правила других сервисов (Docker, fail2ban, ufw и др.) остаются нетронутыми
-* Правила для цепочки DOCKER-USER применяются только если Docker установлен
-* Роль использует `--noflush` для инкрементального применения правил
-* Состояние отслеживается для возможности отката при ошибках
-* Автоматическое определение внешних интерфейсов исключает lo и docker*
-* Поддерживается приоритизация правил через числовые префиксы файлов
+* **Custom rules are added only via the `iptables_rules` module**, not by overriding role variables
+* Variables `iptables_rules` and `ip6tables_rules` are intended only for configuring the role's default rules
+* **Rule management principle**: the role tracks and manages only the rules it created itself. During updates, only previously created role rules are removed, while rules from other services (Docker, fail2ban, ufw, etc.) remain untouched
+* DOCKER-USER chain rules are applied only if Docker is installed
+* The role uses `--noflush` for incremental rule application
+* State is tracked for rollback capability on errors
+* Automatic external interface detection excludes lo and docker*
+* Rule prioritization is supported through numeric file prefixes
+
+## INPUT_DOCKER Processing Logic
+
+When using the ephemeral `INPUT_DOCKER` chain, the rule application script performs the following transformations:
+
+### Duplication to INPUT
+Rules from INPUT_DOCKER are copied to the INPUT chain without changes:
+```bash
+# Original rule in INPUT_DOCKER
+-p tcp --dport 80 -j ACCEPT
+
+# Becomes in INPUT
+-A INPUT -p tcp --dport 80 -j ACCEPT
+```
+
+### Duplication to DOCKER-USER with Modifications
+Rules are adapted for Docker operation:
+
+1. **ACCEPT → RETURN**: `-j ACCEPT` is replaced with `-j RETURN`
+2. **Ports**: `--dport` is replaced with `-m conntrack --ctorigdstport`
+3. **IP addresses**: `-d` is replaced with `-m conntrack --ctorigdst`
+4. **Loopback**: Rules with `-i lo` are skipped
+
+```bash
+# Original rule in INPUT_DOCKER
+-p tcp --dport 80 -j ACCEPT
+
+# Becomes in DOCKER-USER
+-A DOCKER-USER -p tcp -m conntrack --ctorigdstport 80 -j RETURN
+```
+
+### Transformation Examples
+```yaml
+# In INPUT_DOCKER:
+- rule: "-p tcp --dport 80 -j ACCEPT"
+# Result in INPUT:
+-A INPUT -p tcp --dport 80 -j ACCEPT
+# Result in DOCKER-USER:
+-A DOCKER-USER -p tcp -m conntrack --ctorigdstport 80 -j RETURN
+
+# In INPUT_DOCKER:
+- rule: "-s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT"
+# Result in INPUT:
+-A INPUT -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT
+# Result in DOCKER-USER:
+-A DOCKER-USER -m conntrack --ctorigdst 192.168.1.0/24 -p tcp -m conntrack --ctorigdstport 22 -j RETURN
+
+# In INPUT_DOCKER:
+- rule: "-i lo -j ACCEPT"
+# Result in INPUT:
+-A INPUT -i lo -j ACCEPT
+# Result in DOCKER-USER:
+# (rule is skipped as not relevant for Docker)
+```
