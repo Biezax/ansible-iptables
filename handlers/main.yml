@@ -1,11 +1,11 @@
 ---
 - name: reload systemd
-  systemd:
-    daemon_reload: yes
+  ansible.builtin.systemd:
+    daemon_reload: true
   ignore_errors: true
 
 - name: restart firewall
-  systemd:
+  ansible.builtin.systemd:
     name: firewall
     state: restarted
-  ignore_errors: true 
+  ignore_errors: true

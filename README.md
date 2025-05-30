@@ -1,4 +1,4 @@
-# iptables-ng role
+# ansible-iptables role
 
 Role for configuring iptables/ip6tables on Ubuntu servers, providing flexible firewall configuration with automatic interface detection and incremental rule application.
 
