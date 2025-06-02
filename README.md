@@ -1,6 +1,8 @@
 # ansible-iptables role
 
-Role for configuring iptables/ip6tables on Ubuntu servers, providing flexible firewall configuration with automatic interface detection and incremental rule application.
+Role for configuring iptables/ip6tables on Ubuntu servers, specifically designed to solve the complex challenge of network security management when running Docker with enabled iptables integration. Provides flexible security rule configuration with automatic interface detection and incremental rule application, while **managing only its own rules** without interfering with existing configurations from other services.
+
+**The Problem**: Docker automatically modifies iptables rules and can conflict with system-level network security configurations, creating potential security gaps and management complexity. This role addresses these challenges through a specialized ephemeral INPUT_DOCKER chain and seamless Docker integration via the DOCKER-USER chain, ensuring that rules from Docker, fail2ban, UFW, and other services remain untouched.
 
 ## Features
 

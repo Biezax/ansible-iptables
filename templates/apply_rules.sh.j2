@@ -126,18 +126,10 @@ generate_files() {
           docker_rule="${docker_rule// -j ACCEPT/ -j RETURN}"
           docker_rule="${docker_rule// --jump ACCEPT/ --jump RETURN}"
           
-          # Replace destination ports with conntrack original destination ports
-          docker_rule="${docker_rule// --dport / -m conntrack --ctorigdstport }"
-          docker_rule="${docker_rule// --destination-port / -m conntrack --ctorigdstport }"
-          
-          # Replace multiport dports with conntrack (more complex regex)
-          docker_rule=$(echo "$docker_rule" | sed -E 's/-m multiport --dports ([0-9,:]+)/-m conntrack --ctorigdstport \1/g')
-          
           # Replace destination IP addresses with conntrack original destination
           docker_rule="${docker_rule// -d / -m conntrack --ctorigdst }"
           docker_rule="${docker_rule// --destination / -m conntrack --ctorigdst }"
           
-          # Ensure DOCKER-USER chain is defined if not already
           local docker_chain_key="${tblname}/DOCKER-USER"
           if ! [[ -v processed_chains[$docker_chain_key] ]]; then
               log_debug "[generate_files] Adding definition for DOCKER-USER chain in table '$tblname'"
@@ -145,11 +137,30 @@ generate_files() {
               processed_chains[$docker_chain_key]=1
           fi
           
-          # Add rule to DOCKER-USER chain
-          restore_content+="-A DOCKER-USER ${docker_rule}\n"
-          rules_to_delete="${iptables_cmd_base} -t ${tblname} -D DOCKER-USER ${docker_rule}\n${rules_to_delete}"
+          # Handle multiport rules - need to split them into separate rules for conntrack
+          if [[ "$docker_rule" =~ -m[[:space:]]+multiport[[:space:]]+--dports[[:space:]]+([0-9,:]+) ]]; then
+            ports="${BASH_REMATCH[1]}"
+            base_rule="${docker_rule// -m multiport --dports $ports/}"
+            
+            IFS=',' read -ra PORT_ARRAY <<< "$ports"
+            for port in "${PORT_ARRAY[@]}"; do
+              port=$(echo "$port" | xargs)  # trim whitespace
+              single_rule="-m conntrack --ctorigdstport $port ${base_rule}"
+              restore_content+="-A DOCKER-USER ${single_rule}\n"
+              rules_to_delete="${iptables_cmd_base} -t ${tblname} -D DOCKER-USER ${single_rule}\n${rules_to_delete}"
+              log_debug "[generate_files] INPUT_DOCKER: Added multiport rule to DOCKER-USER for port ${port}: '${single_rule}'"
+            done
+          else
+            # For single port rules, replace --dport with conntrack original destination port
+            docker_rule="${docker_rule// --dport / -m conntrack --ctorigdstport }"
+            docker_rule="${docker_rule// --destination-port / -m conntrack --ctorigdstport }"
+            
+            restore_content+="-A DOCKER-USER ${docker_rule}\n"
+            rules_to_delete="${iptables_cmd_base} -t ${tblname} -D DOCKER-USER ${docker_rule}\n${rules_to_delete}"
+            log_debug "[generate_files] INPUT_DOCKER: Added rule to DOCKER-USER: '${docker_rule}'"
+          fi
           
-          log_debug "[generate_files] INPUT_DOCKER: Added rule to DOCKER-USER: '${docker_rule}'"
+          log_debug "[generate_files] INPUT_DOCKER: Added rule to INPUT: '${rule}'"
         fi
         
         log_debug "[generate_files] INPUT_DOCKER: Added rule to INPUT: '${rule}'"
