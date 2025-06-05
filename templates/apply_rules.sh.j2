@@ -3,8 +3,8 @@
 set -euo pipefail
 
 RULES_DIR="{{ iptables_rules_dir }}"
-IPV6_DIR="{{ ip6tables_rules_dir }}"
-IP6_ENABLED={{ ip6tables_enabled | lower }}
+IPV6_DIR="{{ iptables_ipv6_rules_dir }}"
+IP6_ENABLED={{ iptables_ipv6_enabled | lower }}
 STATE_DIR="{{ iptables_state_dir }}"
 
 {% raw %}

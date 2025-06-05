@@ -3,11 +3,11 @@
 iptables_enabled: true
 
 # Enable IPv6 rules
-ip6tables_enabled: true
+iptables_ipv6_enabled: true
 
 # Directories for storing rules
 iptables_rules_dir: /etc/firewall/rules.d/4
-ip6tables_rules_dir: /etc/firewall/rules.d/6
+iptables_ipv6_rules_dir: /etc/firewall/rules.d/6
 
 # Directory for storing state
 iptables_state_dir: /var/lib/iptables-ng/state
@@ -47,25 +47,25 @@ iptables_rules:
       - rule: "-p tcp --dport 22 -j NOTRACK"
         comment: "NOTRACK for SSH"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
       - rule: "-p tcp --dport 80 -j NOTRACK"
         comment: "NOTRACK for HTTP"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
       - rule: "-p tcp --dport 443 -j NOTRACK"
         comment: "NOTRACK for HTTPS"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
       - rule: "-p tcp --dport 53 -j NOTRACK"
         comment: "NOTRACK for DNS TCP"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
       - rule: "-p udp --dport 53 -j NOTRACK"
         comment: "NOTRACK for DNS UDP"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
 
-ip6tables_rules:
+iptables_ipv6_rules:
   filter:
     INPUT_DOCKER:
       - rule: "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
@@ -103,27 +103,27 @@ ip6tables_rules:
       - rule: "-p tcp --dport 22 -j NOTRACK"
         comment: "NOTRACK for SSH"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
       - rule: "-p tcp --dport 80 -j NOTRACK"
         comment: "NOTRACK for HTTP"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
       - rule: "-p tcp --dport 443 -j NOTRACK"
         comment: "NOTRACK for HTTPS"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
       - rule: "-p tcp --dport 53 -j NOTRACK"
         comment: "NOTRACK for DNS TCP"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
       - rule: "-p udp --dport 53 -j NOTRACK"
         comment: "NOTRACK for DNS UDP"
         priority: 20
-        interfaces: "{{ external_interfaces }}"
+        interfaces: "{{ iptables_external_interfaces }}"
 
 # Paths to iptables files
 iptables_compiled_file: /etc/firewall/compiled.rules
-ip6tables_compiled_file: /etc/firewall/compiled-v6.rules
+iptables_ipv6_compiled_file: /etc/firewall/compiled-v6.rules
 
-# List of external interfaces, otherwise will be calculated automatically
-external_interfaces: []
+# list of external interfaces, otherwise will be calculated automatically
+iptables_external_interfaces: []

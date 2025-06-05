@@ -53,8 +53,8 @@ def main():
     # группируем правила по table->chain->priority
     from collections import defaultdict
     grouped = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    for table, chains in rules.items():
-        for chain, entries in chains.items():
+    for table, chains in sorted(rules.items()):
+        for chain, entries in sorted(chains.items()):
             if not isinstance(entries, list):
                 module.fail_json(msg=f"Rules for {table}->{chain} must be a list of dict entries")
             for entry in entries:
@@ -72,15 +72,15 @@ def main():
                     lines.append(f"# {comment}")
                 
                 if isinstance(interfaces, list):
-                    for iface in interfaces:
+                    for iface in sorted(interfaces):
                         lines.append(f"-i {iface} {rule_str}")
                 else:
                     lines.append(rule_str)
                 
                 grouped[table][chain][priority].extend(lines)
     
-    for table, chains in grouped.items():
-        for chain, priorities in chains.items():
+    for table, chains in sorted(grouped.items()):
+        for chain, priorities in sorted(chains.items()):
             dir_path = os.path.join(dest, table, chain)
             if not os.path.isdir(dir_path):
                 if not module.check_mode:

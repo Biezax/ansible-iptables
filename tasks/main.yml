@@ -1,44 +1,44 @@
 ---
 - name: Install iptables package
-  ansible.builtin.package:
+  package:
     name: iptables
     state: present
 
 - name: Determine external interfaces
-  ansible.builtin.set_fact:
-    external_interfaces: "{{ ansible_interfaces | reject('match', '^(lo|docker)') | list }}"
-  when: external_interfaces | default([]) | length == 0
+  set_fact:
+    iptables_external_interfaces: "{{ ansible_interfaces | reject('match','^(lo|docker)') | list | sort }}"
+  when: iptables_external_interfaces | default([]) | length == 0
 
 - name: Create base firewall directories
-  ansible.builtin.file:
+  file:
     path: "{{ item.path }}"
     state: directory
     owner: root
     group: root
-    mode: "0755"
+    mode: 0755
   loop:
     - { path: "/etc/firewall" }
     - { path: "{{ iptables_rules_dir }}", when: iptables_enabled }
-    - { path: "{{ ip6tables_rules_dir }}", when: ip6tables_enabled }
+    - { path: "{{ iptables_ipv6_rules_dir }}", when: iptables_ipv6_enabled }
   when: item.when | default(true)
 
 - name: Ensure iptables state directory exists
-  ansible.builtin.file:
+  file:
     path: "{{ iptables_state_dir }}"
     state: directory
     owner: root
     group: root
-    mode: "0700"
-  when: iptables_enabled or ip6tables_enabled
+    mode: '0700'
+  when: iptables_enabled or iptables_ipv6_enabled
 
 - name: Template firewall application script
-  ansible.builtin.template:
+  template:
     src: apply_rules.sh.j2
     dest: /etc/firewall/apply_rules.sh
     owner: root
     group: root
-    mode: "0755"
-  when: iptables_enabled or ip6tables_enabled
+    mode: '0755'
+  when: iptables_enabled or iptables_ipv6_enabled
   notify: restart firewall
 
 - name: Generate IPv4 rules from iptables_rules variable
@@ -47,45 +47,45 @@
     dest: "{{ iptables_rules_dir }}"
     owner: root
     group: root
-    mode: "0644"
+    mode: '0644'
     name: "default"
   when: iptables_enabled
   notify: restart firewall
 
-- name: Generate IPv6 rules from ip6tables_rules variable
+- name: Generate IPv6 rules from iptables_ipv6_rules variable
   iptables_rules:
-    rules: "{{ ip6tables_rules }}"
-    dest: "{{ ip6tables_rules_dir }}"
+    rules: "{{ iptables_ipv6_rules }}"
+    dest: "{{ iptables_ipv6_rules_dir }}"
     owner: root
     group: root
-    mode: "0644"
+    mode: '0644'
     name: "default"
-  when: ip6tables_enabled
+  when: iptables_ipv6_enabled
   notify: restart firewall
 
 - name: Create firewall service
-  ansible.builtin.template:
+  template:
     src: firewall.service.j2
     dest: /etc/systemd/system/firewall.service
     owner: root
     group: root
-    mode: "0644"
+    mode: 0644
   register: firewall_service
-  when: iptables_enabled or ip6tables_enabled
+  when: iptables_enabled or iptables_ipv6_enabled
   notify: restart firewall
 
 - name: Reload systemd daemon
-  ansible.builtin.systemd:
-    daemon_reload: true
+  systemd:
+    daemon_reload: yes
   when: firewall_service.changed
 
 - name: Enable and start firewall service
-  ansible.builtin.systemd:
+  systemd:
     name: firewall
     state: started
-    enabled: true
-  when: (iptables_enabled or ip6tables_enabled) and not ansible_check_mode
+    enabled: yes
+  when: (iptables_enabled or iptables_ipv6_enabled) and not ansible_check_mode
 
 - name: Flush handlers after enabling service
-  ansible.builtin.meta: flush_handlers
+  meta: flush_handlers
   when: iptables_enabled and not ansible_check_mode
